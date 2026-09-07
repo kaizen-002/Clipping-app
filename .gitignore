@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Fetched media and intermediates. Retention policy is in clipping/retention.py.
+input/
+work/
+
+# The user's finished work. Never auto-deleted, never committed.
+output/
+.agents/
+.claude/
+skills-lock.json
