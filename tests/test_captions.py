@@ -87,3 +87,19 @@ def test_caption_durations_are_whole_frames() -> None:
 def test_zero_length_words_emit_no_event() -> None:
     output = build_ass(words(("ghost", 5.0, 5.0)), clip_start=5.0)
     assert "Dialogue:" not in output
+
+
+def test_line_stays_on_screen_through_inter_word_gaps() -> None:
+    """Whisper leaves gaps between words; the line must not blink out in them.
+
+    Regression: events originally ended at each word's own end time, so a
+    50ms gap produced a frame with no caption at all.
+    """
+    sample = words(("one", 0.0, 0.40), ("two", 0.45, 0.85), ("three", 0.90, 1.30))
+    output = build_ass(sample, clip_start=0.0)
+
+    events = [line for line in output.splitlines() if line.startswith("Dialogue:")]
+    spans = [line.split(",")[1:3] for line in events]
+    # Each event must begin exactly where the previous one ended: no holes.
+    for (_, previous_end), (next_start, _) in zip(spans, spans[1:]):
+        assert previous_end == next_start

@@ -12,3 +12,4 @@ output/
 .agents/
 .claude/
 skills-lock.json
+bin/

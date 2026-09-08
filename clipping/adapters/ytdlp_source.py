@@ -11,7 +11,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from clipping.config import WINDOW_PADDING_SECONDS
+from clipping.config import WINDOW_PADDING_SECONDS, resolve_executable
 
 
 class MediaFetchError(RuntimeError):
@@ -21,8 +21,8 @@ class MediaFetchError(RuntimeError):
 class YtDlpSource:
     """Fetches audio, and later a single window of video, from YouTube."""
 
-    def __init__(self, executable: str = "yt-dlp") -> None:
-        self._executable = executable
+    def __init__(self, executable: str | None = None) -> None:
+        self._executable = executable or resolve_executable("yt-dlp")
 
     def probe_duration(self, url: str) -> float:
         """Read the episode duration without downloading the media."""

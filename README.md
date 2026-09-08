@@ -6,20 +6,24 @@ your machine. No cloud inference, no account, no upload of your audio.
 
 ## Status
 
-The pipeline, the domain rules and the editor UI are written and unit-tested.
-**The end-to-end run has not been executed yet**, because `ffmpeg` and `ollama`
-are not installed on this machine. Until someone runs it against a real episode,
-treat the performance numbers in `docs/PRD.md` as engineering estimates — which
-is what they are labelled as.
+32 unit tests pass, covering the validation ladder, the caption timing
+invariants and the ASS output.
 
-31 unit tests pass, covering the validation ladder, the caption timing
-invariants and the ASS output. Those do not need the external binaries.
+**The render stage is verified against real FFmpeg**: a synthetic 1920x1080
+source crops to 1080x1920, burns in the ASS track, and produces captions with
+the active word coloured and popped. That smoke test caught a bug the unit
+tests had missed — see "inter-word gaps" in `clipping/core/captions.py`.
+
+**Not yet run end to end.** Stages 1-5 need Ollama, which is not installed
+here. Until a real episode goes through, the performance numbers in
+`docs/PRD.md` are engineering estimates — which is what they are labelled as.
 
 ## Install
 
 Requires Python 3.11+, plus two external binaries that are not pip-installable:
 
-- **FFmpeg**, built with libass (`ffmpeg -filters | grep ass` should list it)
+- **FFmpeg** with libass, **ffprobe**, and **yt-dlp** — drop the `.exe` files in
+  `bin/` and they are found automatically, ahead of anything on PATH.
 - **Ollama**, with Llama 3 pulled: `ollama pull llama3`
 
 ```bash

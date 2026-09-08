@@ -89,7 +89,16 @@ def build_ass(words: list[Word], clip_start: float) -> str:
     for line in lines:
         for active_index, active_word in enumerate(line.words):
             start = max(active_word.start - clip_start, 0.0)
-            end = max(active_word.end - clip_start, 0.0)
+
+            # Hold the line until the next word takes over, rather than ending
+            # when this word stops being spoken. Whisper leaves small gaps
+            # between words, and an event that ends at word.end makes the whole
+            # line blink out during every one of them.
+            is_last = active_index == len(line.words) - 1
+            next_boundary = (
+                line.words[active_index + 1].start if not is_last else active_word.end
+            )
+            end = max(next_boundary - clip_start, 0.0)
             if end <= start:
                 continue  # a zero-length word would emit an event nothing can see
 

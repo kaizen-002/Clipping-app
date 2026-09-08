@@ -18,6 +18,7 @@ from clipping.config import (
     OUTPUT_WIDTH,
     PRESET,
     VIDEO_CODEC,
+    resolve_executable,
 )
 
 
@@ -28,8 +29,8 @@ class RenderError(RuntimeError):
 class FfmpegRenderer:
     """Cuts, reframes, burns captions, encodes."""
 
-    def __init__(self, executable: str = "ffmpeg") -> None:
-        self._executable = executable
+    def __init__(self, executable: str | None = None) -> None:
+        self._executable = executable or resolve_executable("ffmpeg")
 
     def render(
         self, video: Path, ass_track: Path, start: float, end: float, destination: Path

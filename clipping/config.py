@@ -2,12 +2,30 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Final
 
 from pydantic import BaseModel
 
 PROJECT_ROOT: Final = Path(__file__).resolve().parent.parent
+BIN_DIR: Final = PROJECT_ROOT / "bin"
+
+
+def resolve_executable(name: str) -> str:
+    """Find a tool in the project's own bin/ first, then on PATH.
+
+    Bundling the binaries beside the project means a working checkout does not
+    depend on what happens to be installed system-wide, which is the usual
+    reason "it runs on my machine" stops being true.
+    """
+    for candidate in (BIN_DIR / f"{name}.exe", BIN_DIR / name):
+        if candidate.exists():
+            return str(candidate)
+    found = shutil.which(name)
+    if found:
+        return found
+    return name  # let the adapter raise a message naming the missing tool
 
 # Encoding is fixed so output size is a stated consequence rather than an
 # unmeasurable target. PRD.md "Encoding Settings".
