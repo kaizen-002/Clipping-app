@@ -233,10 +233,16 @@ app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 
 def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
-    """Run the local server. Never binds to 0.0.0.0."""
+    """Run the local server. Never binds to 0.0.0.0.
+
+    The banner is printed here rather than left to uvicorn's own logger: at
+    log_level "warning" uvicorn says nothing at all, and a server that starts
+    silently is indistinguishable from one that hung.
+    """
     import uvicorn
 
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    print(f"Serving on http://{host}:{port}  (Ctrl+C to stop)", flush=True)
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

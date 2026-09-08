@@ -97,6 +97,18 @@ class YtDlpSource:
                 f"{self._executable} is not installed or not on PATH"
             ) from error
         except subprocess.CalledProcessError as error:
-            last_line = (error.stderr or "").strip().splitlines()
+            stderr = error.stderr or ""
+            last_line = stderr.strip().splitlines()
             detail = last_line[-1] if last_line else f"exit code {error.returncode}"
+
+            # A 403 here almost always means the binary is older than YouTube's
+            # current extraction, not that the video is unavailable. Saying so
+            # turns a dead end into a one-line fix.
+            if "403" in stderr or "Forbidden" in stderr:
+                detail += (
+                    f"\n\nThis usually means {self._executable} is out of date — "
+                    "YouTube changes how it serves media and older builds stop "
+                    "working. Update it:\n"
+                    f"    {self._executable} -U"
+                )
             raise MediaFetchError(f"yt-dlp failed: {detail}") from error

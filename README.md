@@ -24,6 +24,9 @@ Requires Python 3.11+, plus two external binaries that are not pip-installable:
 
 - **FFmpeg** with libass, **ffprobe**, and **yt-dlp** — drop the `.exe` files in
   `bin/` and they are found automatically, ahead of anything on PATH.
+  Keep yt-dlp current (`bin/yt-dlp.exe -U`). YouTube changes how it serves
+  media, and an out-of-date build fails with `HTTP Error 403: Forbidden`.
+  This is why yt-dlp is the one unpinned dependency.
 - **Ollama**, with Llama 3 pulled: `ollama pull llama3`
 
 ```bash
