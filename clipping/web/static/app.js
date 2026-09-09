@@ -222,7 +222,9 @@ function renderResults(state) {
     const at = document.createElement("span");
     at.textContent = formatTimecode(clip.start);
     meta.append(duration, at);
-    if (clip.score) {
+    /* Only heuristic picks carry a score. The model does not produce one, and
+     * "score 0.00" on a model pick reads as a bad clip rather than no metric. */
+    if (clip.score > 0) {
       const score = document.createElement("span");
       score.textContent = `score ${clip.score.toFixed(2)}`;
       meta.append(score);

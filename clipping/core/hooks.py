@@ -18,6 +18,22 @@ from clipping.core.models import (
 )
 
 
+# Clips must come from genuinely different moments. Adjacency is not overlap:
+# a model asked for three clips will happily return 1276-1301 and 1301-1325,
+# which pass an overlap test and are one continuous stretch of talk.
+MIN_GAP_SECONDS = 20.0
+
+
+def conflicts_with(
+    start: float, end: float, taken: list[tuple[float, float]], min_gap: float = MIN_GAP_SECONDS
+) -> bool:
+    """True when this window overlaps, or sits too close to, one already kept."""
+    return any(
+        start < taken_end + min_gap and end > taken_start - min_gap
+        for taken_start, taken_end in taken
+    )
+
+
 class HookRejected(Exception):
     """A candidate failed the ladder. The message names which rung and why."""
 
@@ -154,7 +170,7 @@ def heuristic_hooks(transcript: Transcript, count: int = 3) -> list[HookSelectio
 
     chosen: list[tuple[float, float, float]] = []
     for score, start, end in _scored_windows(transcript):
-        if any(start < taken_end and end > taken_start for _, taken_start, taken_end in chosen):
+        if conflicts_with(start, end, [(s, e) for _, s, e in chosen]):
             continue
         chosen.append((score, start, end))
         if len(chosen) == count:

@@ -34,6 +34,40 @@ Reply with one JSON object and nothing else. No prose, no code fence:
 Every timestamp must be a second that appears in the transcript below."""
 
 
+def _response_schema(count: int) -> dict[str, Any]:
+    """The exact shape the model may emit, bounded to `count` clips.
+
+    The bound is not cosmetic. With an unbounded array the model kept
+    generating and a 30-minute episode took over ten minutes; with maxItems it
+    takes about ten seconds. Measured, both ways.
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "clips": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": count,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "start_seconds": {"type": "number"},
+                        "end_seconds": {"type": "number"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["start_seconds", "end_seconds", "reason"],
+                },
+            }
+        },
+        "required": ["clips"],
+    }
+
+
+# Enough for a handful of clips and their one-sentence reasons. A cap here is
+# a second line of defence behind maxItems.
+_MAX_TOKENS = 500
+
+
 class OllamaHookFinder:
     """Asks a local Llama 3 for a hook, twice at most."""
 
@@ -49,7 +83,7 @@ class OllamaHookFinder:
 
     def find(self, transcript: Transcript, count: int = 3) -> HookCandidateList:
         """One attempt. The retry lives in the pipeline, which owns the ladder."""
-        return self._ask(self._render_prompt(transcript, count))
+        return self._ask(self._render_prompt(transcript, count), count)
 
     def find_with_schema_restated(
         self, transcript: Transcript, failure: str, count: int = 3
@@ -64,12 +98,14 @@ class OllamaHookFinder:
             f"Your previous answer was rejected: {failure}\n"
             "Return one JSON object only, obeying every constraint above."
         )
-        return self._ask(prompt)
+        return self._ask(prompt, count)
 
     def _render_prompt(self, transcript: Transcript, count: int = 3) -> str:
+        # Merged, not raw: the full segment list is long enough that the model
+        # stops obeying the schema. See Transcript.merged.
         lines = [
             f"[{segment.start:.1f} - {segment.end:.1f}] {segment.text}"
-            for segment in transcript.segments
+            for segment in transcript.merged().segments
         ]
         return (
             f"Return the top {count} segments, best first.\n"
@@ -77,14 +113,18 @@ class OllamaHookFinder:
             "Transcript:\n" + "\n".join(lines)
         )
 
-    def _ask(self, prompt: str) -> HookCandidateList:
+    def _ask(self, prompt: str, count: int) -> HookCandidateList:
         payload = {
             "model": self._model,
             "system": _SYSTEM_PROMPT,
             "prompt": prompt,
             "stream": False,
-            "format": "json",  # Ollama constrains decoding to valid JSON
-            "options": {"temperature": 0.2},
+            # A JSON *schema*, not merely "json": this constrains decoding to
+            # the exact shape. Asked for plain "json" on this prompt the model
+            # returned `{}`; asked for free-form JSON it echoed prompt
+            # fragments back as keys.
+            "format": _response_schema(count),
+            "options": {"temperature": 0.2, "num_predict": _MAX_TOKENS},
         }
         try:
             response = httpx.post(

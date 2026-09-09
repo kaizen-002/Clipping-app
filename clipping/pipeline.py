@@ -19,7 +19,12 @@ from pathlib import Path
 
 from clipping.config import DEFAULT_PATHS, Paths, resolve_executable
 from clipping.core import captions
-from clipping.core.hooks import HookRejected, heuristic_hooks, validate_candidate
+from clipping.core.hooks import (
+    HookRejected,
+    conflicts_with,
+    heuristic_hooks,
+    validate_candidate,
+)
 from clipping.core.models import Clip, ClipSet, HookSelection, StageTiming, Transcript
 from clipping.core.ports import HookFinder, MediaSource, Renderer, Transcriber
 from clipping.core.progress import ProgressSink, ProgressTracker
@@ -274,10 +279,10 @@ class Pipeline:
                 outcome = validate_candidate(candidate, transcript)
             except HookRejected:
                 continue  # one bad span does not cost the others
-            if any(
-                outcome.start < kept.end and outcome.end > kept.start for kept in survivors
+            if conflicts_with(
+                outcome.start, outcome.end, [(k.start, k.end) for k in survivors]
             ):
-                continue  # overlapping clips are near-duplicates of one moment
+                continue  # adjacent or overlapping clips are one moment, twice
             survivors.append(
                 HookSelection(
                     start=outcome.start,

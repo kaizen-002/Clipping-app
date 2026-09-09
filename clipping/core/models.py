@@ -63,6 +63,38 @@ class Transcript(BaseModel):
         """Total seconds of speech covered. Used against the ≥99% acceptance."""
         return sum(segment.duration for segment in self.segments)
 
+    def merged(self, window_seconds: float = 25.0) -> Transcript:
+        """Fewer, longer segments, for a prompt an 8B model can hold.
+
+        A half-hour episode is ~870 segments and ~8,900 tokens. At that length
+        Llama 3 8B stops obeying the output schema and starts echoing prompt
+        fragments back as JSON keys — measured, not assumed.
+
+        Chunk boundaries are real segment boundaries, so timestamps the model
+        reads off this still satisfy the ladder's rung 4 against the original
+        transcript.
+        """
+        if not self.segments:
+            return self
+
+        chunks: list[Segment] = []
+        texts: list[str] = []
+        start = self.segments[0].start
+        end = start
+
+        for segment in self.segments:
+            if texts and (segment.end - start) > window_seconds:
+                chunks.append(Segment(text=" ".join(texts), start=start, end=end))
+                texts = []
+                start = segment.start
+            texts.append(segment.text)
+            end = segment.end
+
+        if texts:
+            chunks.append(Segment(text=" ".join(texts), start=start, end=end))
+
+        return self.model_copy(update={"segments": chunks})
+
     def contains_instant(self, instant: float) -> bool:
         """True when `instant` falls inside a real segment.
 

@@ -6,8 +6,8 @@ your machine. No cloud inference, no account, no upload of your audio.
 
 ## Status
 
-41 unit tests pass, covering the validation ladder, the caption timing
-invariants, progress tracking and the ASS output.
+49 unit tests pass, covering the validation ladder, the caption timing
+invariants, progress tracking, retention and the ASS output.
 
 **Measured on a 12-core CPU**, models cached: survey transcription runs at
 ~14x realtime, the precise word-timing pass at ~1.9x, and a windowed video
@@ -17,8 +17,11 @@ The first run is slower and always will be: it downloads ~1.6 GB of Whisper
 models. That download now reports a percentage instead of sitting silent,
 which is what made it look like a hang.
 
-Ollama is optional. Without it, hook detection uses the deterministic
-heuristic and the UI labels every clip as such.
+Ollama with Llama 3 is installed and working: hook detection takes ~9 s on a
+30-minute episode. It remains optional — without it the deterministic heuristic
+picks the clips and the UI labels them as such.
+
+With the transcript cached, a full re-run of a 30-minute episode is **78.7 s**.
 
 ## Install
 
@@ -114,7 +117,7 @@ decision — see `docs/rules.md`.
 ## Checks
 
 ```bash
-python -m pytest tests -q      # 41 tests, no external binaries needed
+python -m pytest tests -q      # 49 tests, no external binaries needed
 python scripts/contrast.py     # every colour pair, light and dark
 ```
 

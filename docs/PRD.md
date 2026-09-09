@@ -83,8 +83,25 @@ machine so no audio leaves it and there is no per-minute cost.
 The LLM must return exactly this, and nothing else:
 
 ```json
-{ "start_seconds": 812.4, "end_seconds": 851.9, "reason": "one sentence" }
+{ "clips": [{ "start_seconds": 812.4, "end_seconds": 851.9, "reason": "one sentence" }] }
 ```
+
+Three things about this are load-bearing, all established by measurement
+against Llama 3 8B on a 30-minute episode:
+
+1. **The transcript sent to the model is merged into ~25 s chunks.** Raw, a
+   half-hour episode is 874 segments and ~8,900 tokens, and at that length the
+   model stopped obeying the schema and echoed prompt fragments back as JSON
+   keys. Merged, it is 72 segments and ~5,500 tokens. Chunk boundaries are real
+   segment boundaries, so rung 4 still holds.
+2. **Decoding is constrained by a JSON schema, not by asking for "json".**
+   Asked for `format: "json"` on this prompt the model returned `{}`.
+3. **The schema bounds the array with `maxItems`.** Unbounded, one request ran
+   past ten minutes; bounded, the same request takes about ten seconds.
+
+Clips must also be separated by at least 20 s. Adjacency is not overlap: the
+model returned 1276-1301 and 1301-1325, which pass an overlap test and are one
+continuous stretch of talk.
 
 Validation, in order — any failure moves to the next step, never silently past it:
 
@@ -209,12 +226,17 @@ The staged pipeline and the target below are **decided** (**Decisions Made 1**).
 |---|---|---|
 | 1. Audio fetch | 2.8 s | Reused a cached file; a cold fetch is ~40 s |
 | 2. Survey transcription (`base`, int8) | 492.8 s | **3.7x realtime** |
-| 3. Hook scoring | 4.8 s | Heuristic fallback; Ollama not installed |
+| 3. Hook scoring | 9.0 s | Llama 3 8B on CPU, via Ollama |
 | 4. Precise transcription | 133.8 s | 3 windows, ~45 s each |
 | 5. Windowed video fetch | 115.0 s | 3 windows, ~38 s each |
 | 6. Caption generation | < 0.1 s | String formatting |
 | 7. Render (x264 CRF 20, libass) | ~40 s | One clip, 59.2 s output, 28 MB |
 | **Total** | **749 s ≈ 12.5 min** | Stage 2 alone is 66% of it |
+
+A second run with the transcript cached and Llama 3 installed totalled **78.7 s**
+(audio 3.1, survey 0.0 cached, hook 9.0, precise 34.6, video fetch 23.9,
+render 8.1). Caching the survey transcript is what makes re-running an episode
+cheap; the first run on a new episode still pays stage 2 in full.
 
 **The earlier 14x-realtime figure for stage 2 was wrong.** It was measured on a
 19-second sample, which is far too short to be representative — model warm-up

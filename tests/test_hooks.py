@@ -116,3 +116,12 @@ def test_heuristic_returns_fewer_when_the_episode_is_short() -> None:
     """Three clips cannot be found in an episode with room for one."""
     source = transcript((0.0, 20.0, "one window only here"), duration=20.0)
     assert len(heuristic_hooks(source, count=3)) == 1
+
+
+def test_adjacent_windows_are_rejected_not_only_overlapping_ones() -> None:
+    """Observed with a real model: it returned 1276-1301 and 1301-1325, which
+    pass an overlap test and are one continuous stretch of talk."""
+    from clipping.core.hooks import conflicts_with
+
+    assert conflicts_with(1301.2, 1325.2, [(1276.4, 1301.1)])
+    assert not conflicts_with(1400.0, 1430.0, [(1276.4, 1301.1)])

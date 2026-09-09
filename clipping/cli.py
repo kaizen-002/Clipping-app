@@ -99,9 +99,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\n\nFound {len(clips)} clip(s):")
     for index, clip in enumerate(clips):
         marker = " (heuristic)" if clip.origin == "heuristic" else ""
+        # Score only means something for heuristic picks; the model does not
+        # produce one, and printing "score 0.00" next to a model pick reads as
+        # a bad clip rather than an absent metric.
+        scored = f", score {clip.score:.2f}" if clip.score else ""
+        # ASCII hyphen: the Windows console is cp1252 and renders an en dash
+        # as a replacement character.
         print(
-            f"  {clip.rank}. {clip.start:7.1f}s – {clip.end:7.1f}s "
-            f"({clip.duration:4.1f}s, score {clip.score:.2f}){marker}"
+            f"  {clip.rank}. {clip.start:7.1f}s - {clip.end:7.1f}s "
+            f"({clip.duration:4.1f}s{scored}){marker}"
         )
         print(f"     {clip.reason}")
 
