@@ -1,9 +1,10 @@
-"""Contrast checker for design.md.
+"""Contrast checker for the product palette.
 
-Every ratio quoted in design.md comes from this script. Numbers typed into a
-design document rather than computed are wrong often enough to be worthless — the
+Every ratio the UI relies on comes from this script. Numbers typed into a
+document rather than computed are wrong often enough to be worthless — the
 first version of design.md had eight ratios in one table and every one was wrong,
-including the four it marked "Pass".
+including the four it marked "Pass". design.md has since been superseded by a
+single dark product palette, but this check outlived it deliberately.
 
 Run after changing any colour. Exits non-zero if any required pair fails.
 
@@ -12,38 +13,26 @@ Run after changing any colour. Exits non-zero if any required pair fails.
 
 import sys
 
-LIGHT = {
-    "ground": "#F4F6FA",
-    "surface": "#FFFFFF",
-    "ink": "#16294B",
-    "muted-ink": "#4A5B78",
-    "disabled-ink": "#7C89A0",
-    "accent": "#A0AA54",
-    "accent-hover": "#949E4E",
-    "accent-active": "#8F9A4B",
-    "accent-strong": "#55611A",
-    "hairline": "#D8DFEA",
-    "success": "#0F6B31",
-    "warning": "#9A4B00",
-    "danger": "#B0201F",
-    "on-danger": "#FFFFFF",
-}
-
+# The product commits to one dark surface, in the manner of the tools it sits
+# beside. There is no light variant to keep in sync, and therefore no second
+# palette to get wrong.
 DARK = {
-    "ground": "#12161C",
-    "surface": "#1B212B",
-    "ink": "#E6EAF2",
-    "muted-ink": "#8B98AD",
-    "disabled-ink": "#5C6878",
-    "accent": "#D3DE84",
-    "accent-hover": "#C2CE6E",
-    "accent-active": "#B1BD5C",
-    "accent-strong": "#D3DE84",
-    "hairline": "#2E3746",
+    "ground": "#0B0E14",
+    "surface": "#141924",
+    "raised": "#1B2230",
+    "ink": "#EDF1F8",
+    "muted-ink": "#8592AB",
+    "disabled-ink": "#5F6B7E",
+    "accent": "#6D4AFF",        # fill only
+    "accent-hover": "#5B38F0",
+    "accent-active": "#4E2CD9",
+    "accent-strong": "#C4B8FF",  # text, links, focus ring
+    "on-accent": "#FFFFFF",
+    "hairline": "#232B3A",
     "success": "#4ADE80",
     "warning": "#FBBF24",
     "danger": "#FF7B72",
-    "on-danger": "#12161C",
+    "on-danger": "#0B0E14",
 }
 
 CAPTION = {
@@ -81,13 +70,14 @@ def audit(name, p, failures):
     g, s = p["ground"], p["surface"]
 
     print("  ---- panel separation: surface vs ground = {:.2f} ----".format(ratio(s, g)))
+    print("  ---- raised vs ground = {:.2f} ----".format(ratio(p["raised"], g)))
 
     for token in ("ink", "muted-ink", "success", "warning", "danger"):
         check("{} on ground".format(token), p[token], g, AA_TEXT, failures)
         check("{} on surface".format(token), p[token], s, AA_TEXT, failures)
 
     # Accent fills are never text. What must pass is the text sitting on them.
-    text_on_fill = p["ink"] if name == "LIGHT" else p["ground"]
+    text_on_fill = p["on-accent"]
     for fill in ("accent", "accent-hover", "accent-active"):
         check("text on {} fill".format(fill), text_on_fill, p[fill], AA_TEXT, failures)
 
@@ -139,8 +129,7 @@ def audit_frames(fps=30):
 
 def main():
     failures = []
-    audit("LIGHT", LIGHT, failures)
-    audit("DARK", DARK, failures)
+    audit("PRODUCT (dark)", DARK, failures)
     audit_captions(failures)
     audit_frames()
 

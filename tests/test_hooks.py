@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from clipping.core.hooks import HookRejected, heuristic_hook, validate_candidate
+from clipping.core.hooks import (
+    HookRejected,
+    heuristic_hook,
+    heuristic_hooks,
+    validate_candidate,
+)
 from clipping.core.models import HookCandidate, Segment, Transcript
 
 
@@ -87,3 +92,27 @@ def test_heuristic_refuses_a_transcript_with_no_legal_window() -> None:
 def test_heuristic_refuses_an_empty_transcript() -> None:
     with pytest.raises(HookRejected, match="empty transcript"):
         heuristic_hook(Transcript(segments=[], source_duration=0.0))
+
+
+def test_heuristic_returns_ranked_non_overlapping_windows() -> None:
+    """Without overlap rejection this returns N near-identical clips."""
+    spans = []
+    for i in range(12):
+        start = i * 20.0
+        spans.append((start, start + 20.0, f"here's the thing nobody tells you point {i} " * 3))
+    source = transcript(*spans, duration=240.0)
+
+    selections = heuristic_hooks(source, count=3)
+    assert len(selections) == 3
+    assert [s.rank for s in selections] == [1, 2, 3]
+    assert [s.score for s in selections] == sorted((s.score for s in selections), reverse=True)
+
+    for earlier, later in zip(selections, selections[1:]):
+        overlapping = earlier.start < later.end and earlier.end > later.start
+        assert not overlapping, f"{earlier.start}-{earlier.end} overlaps {later.start}-{later.end}"
+
+
+def test_heuristic_returns_fewer_when_the_episode_is_short() -> None:
+    """Three clips cannot be found in an episode with room for one."""
+    source = transcript((0.0, 20.0, "one window only here"), duration=20.0)
+    assert len(heuristic_hooks(source, count=3)) == 1

@@ -74,11 +74,22 @@ class Transcript(BaseModel):
 
 
 class HookCandidate(BaseModel):
-    """Exactly what the LLM is contracted to return, and nothing else."""
+    """One segment the LLM proposes."""
 
     start_seconds: float
     end_seconds: float
     reason: str = Field(min_length=1)
+
+
+class HookCandidateList(BaseModel):
+    """Exactly what the LLM is contracted to return, and nothing else.
+
+    A list rather than a single candidate: a run returns the top N ranked
+    segments. Candidates are validated individually, so one bad entry costs
+    that entry rather than the whole generation.
+    """
+
+    clips: list[HookCandidate] = Field(min_length=1)
 
 
 class HookSelection(BaseModel):
@@ -93,6 +104,8 @@ class HookSelection(BaseModel):
     reason: str
     origin: str  # "llm" | "llm-retry" | "heuristic"
     truncated: bool = False
+    score: float = 0.0
+    rank: int = 1
 
     @property
     def duration(self) -> float:
@@ -132,10 +145,22 @@ class Clip(BaseModel):
     origin: str
     reason: str
     truncated: bool = False
+    score: float = 0.0
+    rank: int = 1
 
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+
+class ClipSet(BaseModel):
+    """The ranked clips one run produced, best first."""
+
+    source_url: str
+    clips: list[Clip]
+
+    def ranked(self) -> list[Clip]:
+        return sorted(self.clips, key=lambda clip: clip.rank)
 
 
 class StageTiming(BaseModel):

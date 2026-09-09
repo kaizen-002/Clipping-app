@@ -1,5 +1,25 @@
 # Design System — Local Podcast Shorts Generator
 
+> **SUPERSEDED.** The UI palette in this document is no longer what the product
+> uses. The app now commits to a single dark surface defined in
+> `clipping/web/static/styles.css`, and there is no light variant.
+>
+> What survives, and is still binding:
+> - **`scripts/contrast.py`** — still the gate. It verifies the current palette
+>   and exits non-zero on a regression. It caught a failure in the replacement
+>   palette too (`muted-ink` and `disabled-ink` at 1.45:1), which is the reason
+>   it was kept rather than retired with the rest of this document.
+> - **Caption Output Tokens** (below) — unchanged. Those are burned into the
+>   exported video, not the page, and the renderer reads them from
+>   `clipping/core/caption_tokens.py`.
+> - **The accessibility floors** — 4.5:1 body text, 3:1 non-text and focus
+>   rings, 44px targets, keyboard-operable timeline, no state signalled by
+>   colour alone.
+>
+> Kept rather than deleted because a deleted document gets reconstructed from
+> memory, and the reasoning below — particularly why the first contrast table
+> was wrong — is worth more than the hexes it recommends.
+
 This system covers **two surfaces**, and they follow different rules:
 
 1. **The tool UI** — the local web app. Standard WCAG rules apply.

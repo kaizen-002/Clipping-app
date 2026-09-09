@@ -109,22 +109,19 @@ def score_window(segments_text: str, duration: float) -> float:
     return score
 
 
-def heuristic_hook(transcript: Transcript, target_seconds: float = 35.0) -> HookSelection:
-    """Best-scoring window found by scanning segment start points.
+def _scored_windows(
+    transcript: Transcript, target_seconds: float = 35.0
+) -> list[tuple[float, float, float]]:
+    """Every legal window with its score, best first.
 
-    Windows are anchored to segment boundaries so the result satisfies rung 4 by
+    Windows are anchored to segment boundaries so results satisfy rung 4 by
     construction rather than by luck.
     """
     segments = transcript.segments
-    if not segments:
-        raise HookRejected("cannot run the heuristic on an empty transcript")
-
-    best_score = float("-inf")
-    best: tuple[float, float] | None = None
+    scored: list[tuple[float, float, float]] = []
 
     for index, anchor in enumerate(segments):
         start = anchor.start
-        end = start
         collected: list[str] = []
         for follower in segments[index:]:
             if (follower.end - start) > MAX_CLIP_SECONDS:
@@ -137,20 +134,51 @@ def heuristic_hook(transcript: Transcript, target_seconds: float = 35.0) -> Hook
                 # are both legal but the middle of the range reads better.
                 length_fit = 1.0 - min(abs(span - target_seconds) / target_seconds, 1.0)
                 score = score_window(" ".join(collected), span) + 0.4 * length_fit
-                if score > best_score:
-                    best_score = score
-                    best = (start, end)
+                scored.append((score, start, end))
 
-    if best is None:
+    scored.sort(reverse=True)
+    return scored
+
+
+def heuristic_hooks(transcript: Transcript, count: int = 3) -> list[HookSelection]:
+    """Top `count` non-overlapping windows, ranked.
+
+    Overlap rejection is the point: the raw scan produces hundreds of windows
+    that differ by one segment, so taking the top N by score alone would return
+    five near-identical clips of the same moment.
+    """
+    if not transcript.segments:
+        raise HookRejected("cannot run the heuristic on an empty transcript")
+    if count < 1:
+        raise ValueError("count must be at least 1")
+
+    chosen: list[tuple[float, float, float]] = []
+    for score, start, end in _scored_windows(transcript):
+        if any(start < taken_end and end > taken_start for _, taken_start, taken_end in chosen):
+            continue
+        chosen.append((score, start, end))
+        if len(chosen) == count:
+            break
+
+    if not chosen:
         raise HookRejected(
             f"no window between {MIN_CLIP_SECONDS:.0f}s and {MAX_CLIP_SECONDS:.0f}s "
             "exists in this transcript"
         )
 
-    start, end = best
-    return HookSelection(
-        start=start,
-        end=end,
-        reason="Chosen by the deterministic heuristic after the model failed validation.",
-        origin="heuristic",
-    )
+    return [
+        HookSelection(
+            start=start,
+            end=end,
+            score=round(score, 3),
+            rank=rank,
+            reason="Chosen by the deterministic heuristic after the model failed validation.",
+            origin="heuristic",
+        )
+        for rank, (score, start, end) in enumerate(chosen, start=1)
+    ]
+
+
+def heuristic_hook(transcript: Transcript) -> HookSelection:
+    """The single best window. Kept for the CLI's single-clip path."""
+    return heuristic_hooks(transcript, count=1)[0]

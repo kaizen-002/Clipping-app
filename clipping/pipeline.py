@@ -1,42 +1,40 @@
 """The staged pipeline, wired from ports.
 
 Order matters and is the whole point of the design: audio first, survey
-transcribe, choose the hook, then buy word-level timing and video pixels for
-the chosen 15-60 seconds only.
+transcribe, choose the hooks, then buy word-level timing and video pixels for
+the chosen 15-60 second windows only.
 
-Every stage is timed into work/run_log.jsonl. The budget table in PRD.md is
-engineering estimates; this is where the measurements that replace it come from.
+Every stage reports real progress from the tool doing the work, and is timed
+into work/run_log.jsonl. The budget table in PRD.md started as engineering
+estimates; this is where the measurements that replace it come from.
 """
 
 from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clipping.config import DEFAULT_PATHS, Paths
+from clipping.config import DEFAULT_PATHS, Paths, resolve_executable
 from clipping.core import captions
-from clipping.core.hooks import HookRejected, heuristic_hook, validate_candidate
-from clipping.core.models import Clip, HookSelection, StageTiming, Transcript
+from clipping.core.hooks import HookRejected, heuristic_hooks, validate_candidate
+from clipping.core.models import Clip, ClipSet, HookSelection, StageTiming, Transcript
 from clipping.core.ports import HookFinder, MediaSource, Renderer, Transcriber
+from clipping.core.progress import ProgressSink, ProgressTracker
 from clipping.retention import clear_work, prune_input
 
-ProgressHook = Callable[[str, str], None]
-"""Called as (stage_name, human_detail) when a stage begins."""
+DEFAULT_CLIP_COUNT = 3
 
 
 @dataclass
 class RunResult:
     """Everything a run produced, including how long each stage took."""
 
-    clip: Clip
-    video_path: Path
-    ass_path: Path
-    srt_path: Path
-    output_path: Path | None
+    clip_set: ClipSet
+    video_paths: list[Path]
+    output_paths: dict[int, Path] = field(default_factory=dict)
     timings: list[StageTiming] = field(default_factory=list)
 
     @property
@@ -54,67 +52,99 @@ class Pipeline:
         hook_finder: HookFinder,
         renderer: Renderer,
         paths: Paths = DEFAULT_PATHS,
-        progress: ProgressHook | None = None,
+        progress: ProgressSink | None = None,
+        clip_count: int = DEFAULT_CLIP_COUNT,
     ) -> None:
         self._source = source
         self._transcriber = transcriber
         self._hook_finder = hook_finder
         self._renderer = renderer
         self._paths = paths.ensure()
-        self._progress = progress or (lambda stage, detail: None)
+        self._clip_count = max(clip_count, 1)
+        self.tracker = ProgressTracker(progress)
         self._timings: list[StageTiming] = []
 
     def prepare(self, url: str) -> RunResult:
-        """Run stages 1-6: everything up to the point the user can edit.
+        """Run everything up to the point the user can edit.
 
-        Rendering is deliberately not here. The user edits bounds and caption
-        text first, and only then pays for an encode.
+        Rendering is deliberately not here. The user picks a clip and edits it
+        first, and only then pays for an encode.
         """
         self._timings = []
         prune_input(self._paths.input_dir)
         slug = _slug(url)
 
-        with self._stage("1. Audio fetch"):
+        with self._stage("audio-fetch"):
             duration = self._source.probe_duration(url)
-            audio = self._source.fetch_audio(url, self._paths.input_dir / f"{slug}-audio")
+            audio = self._fetch_audio_once(url, slug, duration)
 
-        with self._stage("2. Survey transcription"):
+        with self._stage("survey"):
             transcript = self._transcriber.survey(audio)
             if transcript.source_duration <= 0:
                 transcript = transcript.model_copy(update={"source_duration": duration})
 
-        with self._stage("3. Hook detection"):
-            selection = self._select_hook(transcript)
+        with self._stage("hook"):
+            selections = self._select_hooks(transcript)
 
-        with self._stage("4. Precise transcription"):
-            words = self._transcriber.precise(audio, selection.start, selection.end)
+        clips: list[Clip] = []
+        videos: list[Path] = []
 
-        with self._stage("5. Windowed video fetch"):
-            video = self._source.fetch_video_window(
-                url, selection.start, selection.end, self._paths.input_dir / f"{slug}-clip"
-            )
+        with self._stage("precise"):
+            for index, selection in enumerate(selections):
+                with self.tracker.slice(index, len(selections)):
+                    words = self._transcriber.precise(
+                        audio, selection.start, selection.end
+                    )
+                clips.append(
+                    Clip(
+                        source_url=url,
+                        start=selection.start,
+                        end=selection.end,
+                        words=words,
+                        origin=selection.origin,
+                        reason=selection.reason,
+                        truncated=selection.truncated,
+                        score=selection.score,
+                        rank=selection.rank,
+                    )
+                )
 
-        clip = Clip(
-            source_url=url,
-            start=selection.start,
-            end=selection.end,
-            words=words,
-            origin=selection.origin,
-            reason=selection.reason,
-            truncated=selection.truncated,
-        )
+        with self._stage("video-fetch"):
+            for index, selection in enumerate(selections):
+                with self.tracker.slice(index, len(selections)):
+                    videos.append(
+                        self._source.fetch_video_window(
+                            url,
+                            selection.start,
+                            selection.end,
+                            self._paths.input_dir / f"{slug}-clip{selection.rank}",
+                        )
+                    )
 
-        with self._stage("6. Caption generation"):
-            ass_path, srt_path = self.write_caption_files(clip, slug)
+        clip_set = ClipSet(source_url=url, clips=clips)
+
+        with self._stage("captions"):
+            for clip in clips:
+                self.write_caption_files(clip, f"{slug}-{clip.rank}")
 
         return RunResult(
-            clip=clip,
-            video_path=video,
-            ass_path=ass_path,
-            srt_path=srt_path,
-            output_path=None,
-            timings=list(self._timings),
+            clip_set=clip_set, video_paths=videos, timings=list(self._timings)
         )
+
+    def _fetch_audio_once(self, url: str, slug: str, duration: float) -> Path:
+        """Reuse audio already in `input/` when it matches the source.
+
+        Checked against the real duration rather than mere existence: a
+        half-written file from an interrupted run exists too, and silently
+        transcribing that would produce a transcript of the wrong episode.
+        """
+        candidate = self._paths.input_dir / f"{slug}-audio.wav"
+        if candidate.exists():
+            existing = _probe_duration(candidate)
+            if existing is not None and abs(existing - duration) <= 1.0:
+                self.tracker.update(100.0, "already downloaded")
+                return candidate
+        return self._source.fetch_audio(url, self._paths.input_dir / f"{slug}-audio")
 
     def write_caption_files(self, clip: Clip, slug: str) -> tuple[Path, Path]:
         """Write the ASS animation source and the SRT upload sidecar.
@@ -128,94 +158,116 @@ class Pipeline:
         srt_path.write_text(captions.build_srt(clip.words, clip.start), encoding="utf-8")
         return ass_path, srt_path
 
-    def export(self, result: RunResult, slug: str | None = None) -> RunResult:
-        """Stage 8: burn in and encode.
+    def export(self, result: RunResult, clip_index: int, slug: str | None = None) -> Path:
+        """Burn in and encode one clip.
 
         Split from `prepare` so an edit costs a caption rebuild, not a re-fetch.
         """
-        name = slug or _slug(result.clip.source_url)
-        ass_path, srt_path = self.write_caption_files(result.clip, name)
+        clips = result.clip_set.ranked()
+        if not 0 <= clip_index < len(clips):
+            raise IndexError(f"no clip at index {clip_index}")
+
+        clip = clips[clip_index]
+        name = slug or f"{_slug(result.clip_set.source_url)}-{clip.rank}"
+        ass_path, _ = self.write_caption_files(clip, name)
         destination = self._paths.output_dir / f"{name}.mp4"
 
         # The fetched window carries padding, so the burn-in cut is relative to
         # where that window actually began rather than to the episode.
-        window_offset = max(result.clip.start - 2.0, 0.0)
-        local_start = result.clip.start - window_offset
-        local_end = local_start + result.clip.duration
+        window_offset = max(clip.start - 2.0, 0.0)
+        local_start = clip.start - window_offset
+        local_end = local_start + clip.duration
 
-        with self._stage("7. Render"):
+        before = len(self._timings)
+        with self._stage("render"):
             output = self._renderer.render(
-                result.video_path, ass_path, local_start, local_end, destination
+                result.video_paths[clip_index], ass_path, local_start, local_end, destination
             )
+        # The caller holds its own copy of the timings list, so the render row
+        # has to be handed back explicitly or it never appears in the report.
+        result.timings.extend(self._timings[before:])
 
+        result.output_paths[clip_index] = output
+        self._write_run_log(result.clip_set.source_url, output)
+        return output
+
+    def cleanup(self) -> None:
+        """Clear intermediates. Called once the user is done with a run."""
         clear_work(self._paths.work_dir)
-        self._write_run_log(result.clip.source_url, output)
 
-        return RunResult(
-            clip=result.clip,
-            video_path=result.video_path,
-            ass_path=ass_path,
-            srt_path=srt_path,
-            output_path=output,
-            timings=list(self._timings),
-        )
+    def _select_hooks(self, transcript: Transcript) -> list[HookSelection]:
+        """Retry once, then the deterministic heuristic.
 
-    def _select_hook(self, transcript: Transcript) -> HookSelection:
-        """The failure path from PRD.md: retry once, then the heuristic.
-
-        Never silently past a failure — each rejection is carried into the next
-        attempt and, if both fail, surfaced on the result as `origin`.
+        Candidates are validated individually: one bad entry in the list costs
+        that entry, not the whole generation. Only an empty survivor set falls
+        back.
         """
+        first_reason = ""
         try:
-            candidate = self._hook_finder.find(transcript)
-            outcome = validate_candidate(candidate, transcript)
-            return HookSelection(
-                start=outcome.start,
-                end=outcome.end,
-                reason=candidate.reason,
-                origin="llm",
-                truncated=outcome.truncated,
-            )
-        except (HookRejected, Exception) as first_error:  # noqa: BLE001
+            candidates = self._hook_finder.find(transcript, self._clip_count)
+            selections = self._validate_all(candidates.clips, transcript, "llm")
+            if selections:
+                return selections
+            first_reason = "no candidate survived validation"
+        except Exception as error:  # noqa: BLE001
             # Broad on purpose: an adapter can fail in ways the core cannot
             # enumerate (socket reset, model unloaded, malformed JSON), and
             # every one of them must reach the retry rather than the user.
-            first_reason = str(first_error)
-            self._progress("3. Hook detection", f"retrying — {first_reason}")
+            first_reason = str(error)
+
+        self.tracker.update(50.0, f"retrying — {first_reason}")
 
         retry = getattr(self._hook_finder, "find_with_schema_restated", None)
         if retry is not None:
             try:
-                candidate = retry(transcript, first_reason)
+                candidates = retry(transcript, first_reason, self._clip_count)
+                selections = self._validate_all(candidates.clips, transcript, "llm-retry")
+                if selections:
+                    return selections
+            except Exception as error:  # noqa: BLE001 - same reasoning
+                self.tracker.update(75.0, f"falling back to heuristic — {error}")
+
+        return heuristic_hooks(transcript, self._clip_count)
+
+    def _validate_all(self, candidates, transcript: Transcript, origin: str) -> list[HookSelection]:
+        """Run the ladder over every candidate, keeping the survivors."""
+        survivors: list[HookSelection] = []
+        for candidate in candidates:
+            try:
                 outcome = validate_candidate(candidate, transcript)
-                return HookSelection(
+            except HookRejected:
+                continue  # one bad span does not cost the others
+            if any(
+                outcome.start < kept.end and outcome.end > kept.start for kept in survivors
+            ):
+                continue  # overlapping clips are near-duplicates of one moment
+            survivors.append(
+                HookSelection(
                     start=outcome.start,
                     end=outcome.end,
                     reason=candidate.reason,
-                    origin="llm-retry",
+                    origin=origin,
                     truncated=outcome.truncated,
+                    rank=len(survivors) + 1,
                 )
-            except Exception as second_error:  # noqa: BLE001 - same reasoning
-                self._progress(
-                    "3. Hook detection", f"falling back to heuristic — {second_error}"
-                )
-
-        return heuristic_hook(transcript)
+            )
+        return survivors
 
     @contextmanager
     def _stage(self, name: str):
-        """Time a stage and announce it."""
-        self._progress(name, "")
+        """Time a stage and drive the progress tracker across it."""
+        self.tracker.begin(name)
         started = time.monotonic()
         try:
             yield
         finally:
             elapsed = time.monotonic() - started
             self._timings.append(StageTiming(stage=name, seconds=elapsed))
+            self.tracker.finish(name)
 
     def _write_run_log(self, url: str, output: Path) -> None:
         """Append measured stage times. This is what replaces the estimates."""
-        log_path = self._paths.work_dir.parent / "work" / "run_log.jsonl"
+        log_path = self._paths.work_dir / "run_log.jsonl"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         record = {
             "url": url,
@@ -226,6 +278,30 @@ class Pipeline:
         }
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
+
+
+def _probe_duration(media: Path) -> float | None:
+    """Duration of a local file, or None when ffprobe cannot read it."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [
+                resolve_executable("ffprobe"),
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=nw=1:nk=1",
+                str(media),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            shell=False,
+        )
+        return float(result.stdout.strip())
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        # An unreadable file is treated as absent, so the caller re-fetches.
+        return None
 
 
 def _slug(url: str) -> str:

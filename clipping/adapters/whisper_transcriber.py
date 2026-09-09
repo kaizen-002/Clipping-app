@@ -1,18 +1,25 @@
 """Transcriber backed by faster-whisper (CTranslate2, int8 on CPU).
 
 Two passes, deliberately asymmetric: a small model reads the whole hour to find
-the hook, and a larger one reads only the chosen window with word timestamps on.
+hooks, and a larger one reads only the chosen windows with word timestamps on.
 Buying word-level timing for the whole episode is the single largest cost in the
-pipeline, and 3,540 of those seconds get thrown away.
+pipeline, and most of those seconds get thrown away.
+
+Measured on 12 CPU cores: survey with `base` runs at ~14x realtime, the precise
+pass with `medium` at ~1.9x.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
+from clipping.adapters.model_cache import ensure_downloaded
 from clipping.config import PRECISE_MODEL, SURVEY_MODEL
 from clipping.core.models import Segment, Transcript, Word
+
+ProgressCallback = Callable[[float, str], None]
 
 
 class TranscriptionError(RuntimeError):
@@ -23,7 +30,7 @@ class FasterWhisperTranscriber:
     """Loads models lazily and caches them per size.
 
     Model load is seconds of CPU; the precise pass would otherwise pay it again
-    for a 60-second window.
+    for every window.
     """
 
     def __init__(
@@ -32,15 +39,24 @@ class FasterWhisperTranscriber:
         precise_model: str = PRECISE_MODEL,
         compute_type: str = "int8",
         threads: int | None = None,
+        on_progress: ProgressCallback | None = None,
+        on_download: ProgressCallback | None = None,
     ) -> None:
         self._survey_model_name = survey_model
         self._precise_model_name = precise_model
         self._compute_type = compute_type
         self._threads = threads or (os.cpu_count() or 4)
+        self._on_progress = on_progress or (lambda percent, detail: None)
+        self._on_download = on_download or (lambda percent, detail: None)
         self._loaded: dict[str, object] = {}
 
     def survey(self, audio: Path) -> Transcript:
-        """Whole episode, segment level. Word timings are not required here."""
+        """Whole episode, segment level. Word timings are not required here.
+
+        The generator is consumed one segment at a time so progress can be
+        reported as decoding advances. This stage is roughly 45% of the run, so
+        it is the one that most needs to visibly move.
+        """
         model = self._model(self._survey_model_name)
         segments_iter, info = model.transcribe(  # type: ignore[attr-defined]
             str(audio),
@@ -48,11 +64,19 @@ class FasterWhisperTranscriber:
             word_timestamps=False,
             vad_filter=True,
         )
-        segments = [
-            Segment(text=segment.text.strip(), start=segment.start, end=segment.end)
-            for segment in segments_iter
-            if segment.text.strip()
-        ]
+
+        total = info.duration or 0.0
+        segments: list[Segment] = []
+        for segment in segments_iter:
+            text = segment.text.strip()
+            if text:
+                segments.append(Segment(text=text, start=segment.start, end=segment.end))
+            if total > 0:
+                self._on_progress(
+                    min(segment.end / total * 100.0, 100.0),
+                    f"{len(segments)} segments",
+                )
+
         if not segments:
             raise TranscriptionError(
                 f"no speech found in {audio.name}; is the audio silent or non-English?"
@@ -60,7 +84,7 @@ class FasterWhisperTranscriber:
         return Transcript(
             segments=segments,
             language=info.language,
-            source_duration=info.duration,
+            source_duration=total,
         )
 
     def precise(self, audio: Path, start: float, end: float) -> list[Word]:
@@ -78,6 +102,7 @@ class FasterWhisperTranscriber:
             clip_timestamps=[start, end],
         )
 
+        span = max(end - start, 0.001)
         words: list[Word] = []
         for segment in segments_iter:
             for word in getattr(segment, "words", None) or []:
@@ -85,6 +110,10 @@ class FasterWhisperTranscriber:
                 if not text:
                     continue
                 words.append(Word(text=text, start=word.start, end=word.end))
+            self._on_progress(
+                min((segment.end - start) / span * 100.0, 100.0),
+                f"{len(words)} words",
+            )
 
         if not words:
             raise TranscriptionError(
@@ -100,6 +129,11 @@ class FasterWhisperTranscriber:
                 raise TranscriptionError(
                     "faster-whisper is not installed; run `pip install -r requirements.txt`"
                 ) from error
+
+            # Downloading before constructing the model is what makes the wait
+            # visible. WhisperModel would otherwise fetch silently.
+            ensure_downloaded(name, self._on_download)
+
             self._loaded[name] = WhisperModel(
                 name,
                 device="cpu",

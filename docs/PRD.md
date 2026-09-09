@@ -117,6 +117,25 @@ Enforced in the domain layer, not only in the UI:
 - Adjusting start or end drops words outside the new bounds rather than rescaling
   the remaining timings.
 
+### Decisions Made 4 — clip count
+
+**DECIDED: a run returns the top N ranked segments, default 3, maximum 5.**
+
+*Was:* "Multiple hooks per episode. One segment per run." — listed under Out of
+Scope.
+
+*Why it changed:* a ranked list is the product. One clip per run makes the
+results screen a single card and gives the user nothing to choose between,
+which is the difference between a tool and a batch script.
+
+*Cost:* stages 4 and 5 now run once per clip, so they scale with N. Stage 2,
+which dominates the wall clock, does not — the survey transcript is read once
+and scored N times. Candidates are validated individually, so one bad span
+costs that span rather than the run.
+
+*Rejected:* one segment per run. Simpler, and already built, but it is the
+single biggest gap between this and the tools it sits beside.
+
 ## Out of Scope
 
 - **Direct social publishing.** No TikTok, YouTube or Instagram API integration.
@@ -130,7 +149,6 @@ Enforced in the domain layer, not only in the UI:
 - **Speaker diarisation.** Captions do not attribute lines to speakers.
 - **Vertical reframing or face tracking.** Fixed centre crop to 9:16, no subject
   tracking.
-- **Multiple hooks per episode.** One segment per run.
 
 ## Technical Requirements
 
@@ -184,25 +202,41 @@ raw clip", because the raw clip is a different resolution, codec and duration.
 
 The staged pipeline and the target below are **decided** (**Decisions Made 1**).
 
-Per-stage estimates for a 1-hour episode on the reference hardware. These are
-engineering estimates, not measurements; the first build task is to replace them
-with measured values.
+**These are measurements, not estimates.** One full run, 30-minute episode,
+3 clips, 12 CPU cores, models already cached, audio reused from a previous run:
 
-| Stage | Estimate | Driver |
+| Stage | Measured | Note |
 |---|---|---|
-| 1. Audio fetch | 10–40 s | ~40–70 MB over a home connection |
-| 2. Survey transcription (`base`, int8, 8 threads) | 4.0–8.0 min | ~8–15× realtime |
-| 3. Hook detection (Llama 3 8B, CPU) | 1.0–4.0 min | ~12k-token prompt; CPU prompt eval dominates |
-| 4. Precise transcription of ≤60 s (`medium`) | 20–45 s | ~1.5–3× realtime on 60 s |
-| 5. Windowed video fetch | 10–30 s | ~15–40 MB |
-| 6. Caption generation | < 1 s | String formatting |
-| 7. Render (x264 CRF 20, libass) | 30–70 s | ~1–2× realtime on 60 s |
-| **Total** | **≈ 7–15 min** | Stages 2 and 3 are ~85% of it |
+| 1. Audio fetch | 2.8 s | Reused a cached file; a cold fetch is ~40 s |
+| 2. Survey transcription (`base`, int8) | 492.8 s | **3.7x realtime** |
+| 3. Hook scoring | 4.8 s | Heuristic fallback; Ollama not installed |
+| 4. Precise transcription | 133.8 s | 3 windows, ~45 s each |
+| 5. Windowed video fetch | 115.0 s | 3 windows, ~38 s each |
+| 6. Caption generation | < 0.1 s | String formatting |
+| 7. Render (x264 CRF 20, libass) | ~40 s | One clip, 59.2 s output, 28 MB |
+| **Total** | **749 s ≈ 12.5 min** | Stage 2 alone is 66% of it |
+
+**The earlier 14x-realtime figure for stage 2 was wrong.** It was measured on a
+19-second sample, which is far too short to be representative — model warm-up
+and VAD behaviour do not amortise the same way. The real figure on a
+half-hour episode is 3.7x.
+
+**This misses the target.** At 3.7x, a 1-hour episode spends ~16 minutes in
+stage 2 alone and roughly 20 minutes overall, against a p50 of 12. The levers,
+in order of effect:
+
+1. `tiny` instead of `base` for the survey pass — roughly halves stage 2, at a
+   cost in transcript quality that only affects hook *selection*, never the
+   captions, which come from the precise pass.
+2. Chunked parallel transcription — faster-whisper is single-job; splitting the
+   audio into N pieces across cores is the largest available win and has not
+   been attempted.
+3. Fewer clips — stages 4 and 5 scale linearly with the count.
 
 **Target: p50 ≤ 12 minutes, p90 ≤ 20 minutes**, over 30 episodes on the reference
-hardware. This is a commitment, and the numbers in the table above are **not**
-evidence for it — they are engineering estimates. Proving the target means
-replacing them with measurements.
+hardware. One measured 30-minute run came in at 12.5 minutes, so a 1-hour
+episode does not currently meet this. The target stands as a commitment; the
+gap above is the work.
 
 The previous target of 5 minutes was not achievable. Transcribing a 1-hour episode
 alone exceeds it on 8 CPU cores, before any other stage runs. The audio-first,

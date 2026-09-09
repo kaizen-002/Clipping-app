@@ -6,7 +6,9 @@ Argument lists only — never a shell string.
 
 from __future__ import annotations
 
+import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from clipping.config import (
@@ -21,6 +23,11 @@ from clipping.config import (
     resolve_executable,
 )
 
+ProgressCallback = Callable[[float, str], None]
+
+# FFmpeg's -progress stream reports elapsed output time in microseconds.
+_OUT_TIME = re.compile(r"out_time_us=(\d+)")
+
 
 class RenderError(RuntimeError):
     """FFmpeg failed. The message carries its last stderr line."""
@@ -29,8 +36,13 @@ class RenderError(RuntimeError):
 class FfmpegRenderer:
     """Cuts, reframes, burns captions, encodes."""
 
-    def __init__(self, executable: str | None = None) -> None:
+    def __init__(
+        self,
+        executable: str | None = None,
+        on_progress: ProgressCallback | None = None,
+    ) -> None:
         self._executable = executable or resolve_executable("ffmpeg")
+        self._on_progress = on_progress or (lambda percent, detail: None)
 
     def render(
         self, video: Path, ass_track: Path, start: float, end: float, destination: Path
@@ -49,6 +61,7 @@ class FfmpegRenderer:
         command = [
             self._executable,
             "-hide_banner", "-loglevel", "error", "-y",
+            "-progress", "pipe:1", "-nostats",
             "-ss", f"{start:.3f}",
             "-t", f"{duration:.3f}",
             "-i", str(video),
@@ -63,7 +76,7 @@ class FfmpegRenderer:
             "-movflags", "+faststart",
             str(destination),
         ]
-        self._run(command)
+        self._run(command, duration)
 
         if not destination.exists():
             raise RenderError(f"FFmpeg reported success but {destination} is missing")
@@ -93,16 +106,46 @@ class FfmpegRenderer:
         text = str(path).replace("\\", "/")
         return text.replace(":", "\\:")
 
-    def _run(self, command: list[str]) -> None:
+    def _run(self, command: list[str], duration: float) -> None:
+        """Run FFmpeg, reporting encode progress against the known duration.
+
+        Read line by line rather than waited on: an encode is tens of seconds
+        and a blocking call cannot report anything while it runs.
+        """
         try:
-            subprocess.run(
-                command, capture_output=True, text=True, check=True, shell=False
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                # Merged, not a second pipe: draining only stdout while stderr
+                # fills its own buffer deadlocks the child. FFmpeg is quiet at
+                # loglevel error, but "quiet enough today" is not a guarantee.
+                stderr=subprocess.STDOUT,
+                text=True,
+                shell=False,
             )
         except FileNotFoundError as error:
             raise RenderError(
                 f"{self._executable} is not installed or not on PATH"
             ) from error
-        except subprocess.CalledProcessError as error:
-            lines = (error.stderr or "").strip().splitlines()
-            detail = lines[-1] if lines else f"exit code {error.returncode}"
-            raise RenderError(f"FFmpeg failed: {detail}") from error
+
+        collected: list[str] = []
+        assert process.stdout is not None
+        for line in process.stdout:
+            collected.append(line)
+            match = _OUT_TIME.search(line)
+            if match and duration > 0:
+                encoded = int(match.group(1)) / 1_000_000
+                self._on_progress(min(encoded / duration * 100.0, 100.0), "")
+
+        process.wait()
+        if process.returncode != 0:
+            # Progress keys dominate the merged stream, so report the last line
+            # that is not one of them.
+            noise = ("out_time", "frame=", "fps=", "bitrate=", "total_size",
+                     "speed=", "progress=", "stream_", "dup_frames", "drop_frames")
+            lines = [
+                line.strip() for line in collected
+                if line.strip() and not line.startswith(noise)
+            ]
+            detail = lines[-1] if lines else f"exit code {process.returncode}"
+            raise RenderError(f"FFmpeg failed: {detail}")

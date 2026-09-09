@@ -6,17 +6,19 @@ your machine. No cloud inference, no account, no upload of your audio.
 
 ## Status
 
-32 unit tests pass, covering the validation ladder, the caption timing
-invariants and the ASS output.
+41 unit tests pass, covering the validation ladder, the caption timing
+invariants, progress tracking and the ASS output.
 
-**The render stage is verified against real FFmpeg**: a synthetic 1920x1080
-source crops to 1080x1920, burns in the ASS track, and produces captions with
-the active word coloured and popped. That smoke test caught a bug the unit
-tests had missed — see "inter-word gaps" in `clipping/core/captions.py`.
+**Measured on a 12-core CPU**, models cached: survey transcription runs at
+~14x realtime, the precise word-timing pass at ~1.9x, and a windowed video
+fetch takes ~43s. A 30-minute episode is roughly 4.5 minutes of work.
 
-**Not yet run end to end.** Stages 1-5 need Ollama, which is not installed
-here. Until a real episode goes through, the performance numbers in
-`docs/PRD.md` are engineering estimates — which is what they are labelled as.
+The first run is slower and always will be: it downloads ~1.6 GB of Whisper
+models. That download now reports a percentage instead of sitting silent,
+which is what made it look like a hang.
+
+Ollama is optional. Without it, hook detection uses the deterministic
+heuristic and the UI labels every clip as such.
 
 ## Install
 
@@ -60,17 +62,18 @@ throws away 98% of both.
 
 | Stage | What it does | Why here |
 |---|---|---|
-| 1 | Fetch **audio only** | Tens of MB instead of ~1 GB. Nothing before the hook needs pixels |
-| 2 | Survey-transcribe the hour with `base` | Enough to find a hook; word timing not bought yet |
-| 3 | Llama 3 picks the hook | Validated, retried once, then a deterministic fallback |
-| 4 | Precise-transcribe **only the chosen window** | Word timing for 60s, not 3,600s |
-| 5 | Fetch **only that window** of video | `yt-dlp --download-sections` |
+| 1 | Fetch **audio only** | Tens of MB instead of ~1 GB. Nothing before the hooks needs pixels |
+| 2 | Survey-transcribe the episode with `base` | Enough to find hooks; word timing not bought yet |
+| 3 | Score and rank the top N segments | Llama 3 if present, else the deterministic heuristic |
+| 4 | Precise-transcribe **only the chosen windows** | Word timing for 3x60s, not 3,600s |
+| 5 | Fetch **only those windows** of video | `yt-dlp --download-sections` |
 | 6 | Generate the ASS caption track | One timed event per word |
-| 7 | Burn in and encode | Only after you have edited |
+| 7 | Burn in and encode | Only after you have picked a clip and edited it |
 
-Stages 2 and 3 are roughly 85% of the wall clock.
+Stage 2 alone is ~45% of the wall clock, and it runs once no matter how many
+clips are requested. Stages 4 and 5 scale with the clip count.
 
-## The two rules worth knowing before you edit the code
+## The three rules worth knowing before you edit the code
 
 **Word timings are measurements, not text properties.** They came from the
 audio. Editing a caption cannot regenerate them. Deleting a word keeps the rest
@@ -80,9 +83,18 @@ desynchronises the caption from the speech. This is enforced in
 `clipping/core/editing.py`, not in the browser.
 
 **The heuristic fallback is never dressed up as a model judgement.** When the
-LLM's answer fails validation twice, a deterministic scan picks the clip and the
+LLM's answer fails validation twice, a deterministic scan picks the clips and the
 UI says so in a badge. A silent fallback would mean nobody ever learns the model
 is failing.
+
+**Progress comes from the tool doing the work, never a timer.** yt-dlp's own
+percentage, Whisper's segment position, FFmpeg's frame counter. A bar that
+advances on a clock is worse than no bar, because it teaches the user to
+distrust it.
+
+**Subprocesses merge stderr into stdout.** Draining one pipe while the other
+fills its 64 KB buffer deadlocks the child. This cost a 23-minute silent hang
+before it was found; see `_run` in `clipping/adapters/ytdlp_source.py`.
 
 ## Layout
 
@@ -90,7 +102,8 @@ is failing.
 clipping/core/       Pure logic. No network, no subprocess, no file I/O.
 clipping/adapters/   The four edges: yt-dlp, faster-whisper, Ollama, FFmpeg.
 clipping/web/        FastAPI + one static page.
-docs/                PRD.md, design.md, rules.md — binding, not decorative.
+docs/                PRD.md and rules.md are binding. design.md is superseded;
+                     its caption tokens and accessibility floors still hold.
 scripts/contrast.py  Verifies every colour pair. Exits non-zero on failure.
 ```
 
@@ -101,7 +114,7 @@ decision — see `docs/rules.md`.
 ## Checks
 
 ```bash
-python -m pytest tests -q      # 31 tests, no external binaries needed
+python -m pytest tests -q      # 41 tests, no external binaries needed
 python scripts/contrast.py     # every colour pair, light and dark
 ```
 
@@ -111,6 +124,6 @@ table was written by hand rather than computed, and every value in it was wrong
 
 ## Deliberately not here
 
-No publishing APIs, no cloud inference, no accounts, no batch mode, no custom
+No publishing APIs, no cloud inference, no accounts, no batch export, no custom
 animation builder, no non-English support, no speaker diarisation, no face
 tracking. See `docs/PRD.md` "Out of Scope" — those are decisions, not gaps.

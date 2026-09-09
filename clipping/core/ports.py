@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from clipping.core.models import HookCandidate, Transcript, Word
+from clipping.core.models import HookCandidateList, Transcript, Word
 
 
 class MediaSource(Protocol):
@@ -49,10 +49,10 @@ class Transcriber(Protocol):
 
 
 class HookFinder(Protocol):
-    """Chooses the segment worth clipping."""
+    """Chooses the segments worth clipping."""
 
-    def find(self, transcript: Transcript) -> HookCandidate:
-        """Return a candidate, or raise. Validation is the caller's job."""
+    def find(self, transcript: Transcript, count: int = 3) -> HookCandidateList:
+        """Return candidates, or raise. Validation is the caller's job."""
         ...
 
 
