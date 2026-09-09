@@ -14,14 +14,18 @@ from pathlib import Path
 from clipping.config import INPUT_MAX_AGE_DAYS, INPUT_MAX_BYTES
 
 
-def clear_work(work_dir: Path) -> None:
-    """Remove intermediates after a successful run."""
+def clear_work(work_dir: Path, keep_suffixes: tuple[str, ...] = ()) -> None:
+    """Remove intermediates after a successful run.
+
+    `keep_suffixes` spares files that are expensive to rebuild — the survey
+    transcript above all, which costs two thirds of a run.
+    """
     if not work_dir.exists():
         return
     for entry in work_dir.iterdir():
         if entry.is_dir():
             shutil.rmtree(entry, ignore_errors=True)
-        else:
+        elif not any(entry.name.endswith(suffix) for suffix in keep_suffixes):
             entry.unlink(missing_ok=True)
 
 

@@ -79,9 +79,7 @@ class Pipeline:
             audio = self._fetch_audio_once(url, slug, duration)
 
         with self._stage("survey"):
-            transcript = self._transcriber.survey(audio)
-            if transcript.source_duration <= 0:
-                transcript = transcript.model_copy(update={"source_duration": duration})
+            transcript = self._survey_once(audio, slug, duration)
 
         with self._stage("hook"):
             selections = self._select_hooks(transcript)
@@ -146,6 +144,41 @@ class Pipeline:
                 return candidate
         return self._source.fetch_audio(url, self._paths.input_dir / f"{slug}-audio")
 
+    def _survey_once(self, audio: Path, slug: str, duration: float) -> Transcript:
+        """Transcribe, or reuse a cached transcript for the same audio.
+
+        The survey pass is two thirds of the wall clock and its result depends
+        only on the audio file, so re-running it for the same episode is pure
+        waste. The cache is keyed on the audio's size and mtime: a re-fetched
+        or truncated file misses, rather than silently reusing a transcript of
+        different audio.
+        """
+        cache_path = self._paths.work_dir / f"{slug}-transcript.json"
+        stat = audio.stat()
+        fingerprint = {"bytes": stat.st_size, "mtime": int(stat.st_mtime)}
+
+        if cache_path.exists():
+            try:
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                if cached.get("fingerprint") == fingerprint:
+                    self.tracker.update(100.0, "reusing cached transcript")
+                    return Transcript.model_validate(cached["transcript"])
+            except (json.JSONDecodeError, KeyError, ValueError):
+                # A corrupt cache is not a reason to fail the run; transcribe
+                # again and overwrite it.
+                pass
+
+        transcript = self._transcriber.survey(audio)
+        if transcript.source_duration <= 0:
+            transcript = transcript.model_copy(update={"source_duration": duration})
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(
+            json.dumps({"fingerprint": fingerprint, "transcript": transcript.model_dump()}),
+            encoding="utf-8",
+        )
+        return transcript
+
     def write_caption_files(self, clip: Clip, slug: str) -> tuple[Path, Path]:
         """Write the ASS animation source and the SRT upload sidecar.
 
@@ -192,8 +225,12 @@ class Pipeline:
         return output
 
     def cleanup(self) -> None:
-        """Clear intermediates. Called once the user is done with a run."""
-        clear_work(self._paths.work_dir)
+        """Clear intermediates, keeping the transcript cache.
+
+        The cache is the most expensive thing on disk to rebuild, and it is
+        small. Deleting it would make every re-run pay the survey pass again.
+        """
+        clear_work(self._paths.work_dir, keep_suffixes=("-transcript.json",))
 
     def _select_hooks(self, transcript: Transcript) -> list[HookSelection]:
         """Retry once, then the deterministic heuristic.
