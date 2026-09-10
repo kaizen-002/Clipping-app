@@ -73,6 +73,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # The Windows console defaults to cp1252, which cannot encode a curly
+    # quote or a dash. Clip reasons come from a language model and transcript
+    # text comes from arbitrary speech, so a crash here is a matter of time.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
     last_line = ""
 
     def show(event: ProgressEvent) -> None:

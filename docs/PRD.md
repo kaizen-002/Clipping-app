@@ -99,6 +99,16 @@ against Llama 3 8B on a 30-minute episode:
 3. **The schema bounds the array with `maxItems`.** Unbounded, one request ran
    past ten minutes; bounded, the same request takes about ten seconds.
 
+**Every accepted span is snapped to sentence boundaries** before it becomes a
+clip. The model can only name boundaries that exist in the prompt it was given,
+and that prompt is chunked, so left alone every clip is exactly one 25 s chunk —
+reported from real use as "too short, and it just cuts off in the middle". The
+snap moves the start back to the beginning of its sentence, the end forward to
+the end of its sentence, and then grows forward a sentence at a time until the
+clip is at least 32 s, because a point needs room to land. Measured effect on
+one episode: 24.0 s to 32.2 s and 24.7 s to 36.9 s, both now opening and closing
+on complete sentences.
+
 Clips must also be separated by at least 20 s. Adjacency is not overlap: the
 model returned 1276-1301 and 1301-1325, which pass an overlap test and are one
 continuous stretch of talk.

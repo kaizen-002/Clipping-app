@@ -6,8 +6,8 @@ your machine. No cloud inference, no account, no upload of your audio.
 
 ## Status
 
-49 unit tests pass, covering the validation ladder, the caption timing
-invariants, progress tracking, retention and the ASS output.
+58 unit tests pass, covering the validation ladder, clip boundary snapping,
+the caption timing invariants, progress tracking, retention and the ASS output.
 
 **Measured on a 12-core CPU**, models cached: survey transcription runs at
 ~14x realtime, the precise word-timing pass at ~1.9x, and a windowed video
@@ -90,6 +90,12 @@ LLM's answer fails validation twice, a deterministic scan picks the clips and th
 UI says so in a badge. A silent fallback would mean nobody ever learns the model
 is failing.
 
+**A clip must start and end on a complete sentence.** The model proposes an
+approximate span against a chunked transcript; `clipping/core/boundaries.py`
+moves it onto sentence edges and grows it until the point has room to land.
+Without this every clip is exactly one prompt chunk, which reads as "too short
+and cut off in the middle" — that is not a metaphor, it is the bug report.
+
 **Progress comes from the tool doing the work, never a timer.** yt-dlp's own
 percentage, Whisper's segment position, FFmpeg's frame counter. A bar that
 advances on a clock is worse than no bar, because it teaches the user to
@@ -117,7 +123,7 @@ decision — see `docs/rules.md`.
 ## Checks
 
 ```bash
-python -m pytest tests -q      # 49 tests, no external binaries needed
+python -m pytest tests -q      # 58 tests, no external binaries needed
 python scripts/contrast.py     # every colour pair, light and dark
 ```
 

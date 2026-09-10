@@ -19,6 +19,7 @@ from pathlib import Path
 
 from clipping.config import DEFAULT_PATHS, Paths, resolve_executable
 from clipping.core import captions
+from clipping.core.boundaries import is_well_formed, snap_to_sentences
 from clipping.core.hooks import (
     HookRejected,
     conflicts_with,
@@ -269,7 +270,18 @@ class Pipeline:
             except Exception as error:  # noqa: BLE001 - same reasoning
                 self.tracker.update(75.0, f"falling back to heuristic — {error}")
 
-        return heuristic_hooks(transcript, self._clip_count)
+        return [
+            self._snapped(selection, transcript)
+            for selection in heuristic_hooks(transcript, self._clip_count)
+        ]
+
+    @staticmethod
+    def _snapped(selection: HookSelection, transcript: Transcript) -> HookSelection:
+        """Apply the same sentence snapping to a heuristic pick."""
+        start, end = snap_to_sentences(selection.start, selection.end, transcript)
+        if not is_well_formed(start, end):
+            return selection
+        return selection.model_copy(update={"start": start, "end": end})
 
     def _validate_all(self, candidates, transcript: Transcript, origin: str) -> list[HookSelection]:
         """Run the ladder over every candidate, keeping the survivors."""
@@ -279,14 +291,19 @@ class Pipeline:
                 outcome = validate_candidate(candidate, transcript)
             except HookRejected:
                 continue  # one bad span does not cost the others
-            if conflicts_with(
-                outcome.start, outcome.end, [(k.start, k.end) for k in survivors]
-            ):
+            # The model can only name boundaries that exist in the prompt it
+            # was given, and that prompt is chunked. Snapping moves the span
+            # onto sentence edges so a clip does not open or close mid-phrase.
+            start, end = snap_to_sentences(outcome.start, outcome.end, transcript)
+            if not is_well_formed(start, end):
+                continue
+
+            if conflicts_with(start, end, [(k.start, k.end) for k in survivors]):
                 continue  # adjacent or overlapping clips are one moment, twice
             survivors.append(
                 HookSelection(
-                    start=outcome.start,
-                    end=outcome.end,
+                    start=start,
+                    end=end,
                     reason=candidate.reason,
                     origin=origin,
                     truncated=outcome.truncated,
