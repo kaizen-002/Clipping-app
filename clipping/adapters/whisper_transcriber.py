@@ -16,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from clipping.adapters.model_cache import ensure_downloaded
-from clipping.config import PRECISE_MODEL, SURVEY_MODEL
+from clipping.config import PRECISE_MODEL, SURVEY_MODEL, TRANSCRIBE_LANGUAGE
 from clipping.core.models import Segment, Transcript, Word
 
 ProgressCallback = Callable[[float, str], None]
@@ -24,6 +24,17 @@ ProgressCallback = Callable[[float, str], None]
 
 class TranscriptionError(RuntimeError):
     """The model could not be loaded or the audio could not be read."""
+
+
+class LanguageMismatch(TranscriptionError):
+    """The audio is not in the language the pipeline is configured for.
+
+    This exists because the failure is otherwise silent and total. Told
+    `language="en"`, Whisper does not refuse non-English audio — it produces
+    fluent, well-punctuated English nonsense. Everything downstream then works
+    perfectly on gibberish: the hooks are chosen from it, the captions are
+    written from it, and the clips look fine and mean nothing.
+    """
 
 
 class FasterWhisperTranscriber:
@@ -39,9 +50,11 @@ class FasterWhisperTranscriber:
         precise_model: str = PRECISE_MODEL,
         compute_type: str = "int8",
         threads: int | None = None,
+        language: str = TRANSCRIBE_LANGUAGE,
         on_progress: ProgressCallback | None = None,
         on_download: ProgressCallback | None = None,
     ) -> None:
+        self._language = language
         self._survey_model_name = survey_model
         self._precise_model_name = precise_model
         self._compute_type = compute_type
@@ -58,12 +71,29 @@ class FasterWhisperTranscriber:
         it is the one that most needs to visibly move.
         """
         model = self._model(self._survey_model_name)
+        # language=None asks Whisper to detect rather than assume. Assuming is
+        # what produced a fluent English transcript of Indonesian audio.
         segments_iter, info = model.transcribe(  # type: ignore[attr-defined]
             str(audio),
-            language="en",
+            language=None,
             word_timestamps=False,
             vad_filter=True,
         )
+
+        detected = info.language
+        if detected != self._language:
+            raise LanguageMismatch(
+                f"this audio is {detected} "
+                f"({info.language_probability:.0%} confidence), but the pipeline "
+                f"is configured for {self._language}.\n\n"
+                f"Transcribing it as {self._language} does not fail loudly — it "
+                f"produces fluent {self._language} nonsense, and every clip "
+                "built from it is meaningless.\n\n"
+                f"To process {detected} audio, set TRANSCRIBE_LANGUAGE = "
+                f'"{detected}" in clipping/config.py. Note that PRD.md scopes '
+                "the MVP to English, so caption quality for other languages is "
+                "not yet verified."
+            )
 
         total = info.duration or 0.0
         segments: list[Segment] = []
@@ -96,7 +126,7 @@ class FasterWhisperTranscriber:
         model = self._model(self._precise_model_name)
         segments_iter, _ = model.transcribe(  # type: ignore[attr-defined]
             str(audio),
-            language="en",
+            language=self._language,
             word_timestamps=True,
             vad_filter=False,
             clip_timestamps=[start, end],

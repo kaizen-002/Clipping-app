@@ -163,6 +163,30 @@ costs that span rather than the run.
 *Rejected:* one segment per run. Simpler, and already built, but it is the
 single biggest gap between this and the tools it sits beside.
 
+### Decisions Made 5 — audio language
+
+**DECIDED: Indonesian is supported. The pipeline is configured by
+`TRANSCRIBE_LANGUAGE` and refuses audio that does not match it.**
+
+*Was:* "Non-English audio. English only in v1." — listed under Out of Scope.
+
+*Why it changed:* the user's actual source material is Indonesian, and the
+English-only assumption did not fail safely. Told `language="en"`, Whisper does
+not refuse Indonesian audio — it emits fluent, well-punctuated English nonsense.
+A real 30-minute episode produced a transcript reading "It's easy to steam it by
+herself... But still you can trust us", where the audio actually said "Oh, kamu
+lagi doyan, tuh?". Every stage downstream then worked correctly on gibberish:
+hooks were scored from it, captions were written from it, and the exported clips
+looked fine and meant nothing.
+
+*What changed with it:* the survey pass now detects rather than assumes, and
+raises `LanguageMismatch` when the detected language differs from the
+configured one. The hook model is `qwen2.5:14b`, which is materially stronger on
+non-English text than Llama 3 8B.
+
+*Still unverified for Indonesian:* caption word-timing accuracy, and whether
+hook selection quality holds. Both were measured for English only.
+
 ## Out of Scope
 
 - **Direct social publishing.** No TikTok, YouTube or Instagram API integration.
@@ -171,7 +195,6 @@ single biggest gap between this and the tools it sits beside.
 - **Authentication and multi-user profiles.** Single user, single machine.
 - **Custom animation builder.** One bundled caption style, not user-authored.
 - **Batch processing.** One episode per run.
-- **Non-English audio.** English only in v1.
 - **Sources other than YouTube.** No local file import, no RSS, no other hosts.
 - **Speaker diarisation.** Captions do not attribute lines to speakers.
 - **Vertical reframing or face tracking.** Fixed centre crop to 9:16, no subject

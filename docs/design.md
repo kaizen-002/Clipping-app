@@ -270,6 +270,8 @@ caption.pop-scale-from     0.88
 caption.pop-scale-to       1.06
 caption.settle-duration    67ms          /* 2 frames, 1.06 back to 1.00 */
 caption.fade-in            67ms          /* 2 frames */
+caption.entrance-fade      100ms         /* 3 frames, per line not per word */
+caption.entrance-rise      28px          /* travels up into the safe area */
 caption.word-advance       from Whisper word timings — never a fixed interval
 ```
 
@@ -283,6 +285,12 @@ is not decorative and must not be reduced.
 **The active word is signalled twice** — colour *and* the pop scale. Active versus
 inactive is only 1.34 : 1 in luminance, so colour alone would not read for a
 viewer with a colour vision deficiency, and would vanish on a yellow-ish frame.
+
+**Line entrance.** Each new line fades up and rises into place over 3 frames.
+It is applied to a line's first word event only — retriggering it per word
+makes the caption jitter continuously, which reads as a glitch rather than a
+beat. The rise target is derived from `FRAME_HEIGHT - SAFE_AREA_BOTTOM` rather
+than written down twice, so it cannot drift from the style header's margin.
 
 **Why a separate motion scale.** The UI tokens are wrong for video on two counts:
 they are authored for an event-driven compositor that can render at any moment,

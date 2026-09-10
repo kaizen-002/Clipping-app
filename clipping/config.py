@@ -43,7 +43,15 @@ INPUT_MAX_AGE_DAYS: Final = 7
 INPUT_MAX_BYTES: Final = 5 * 1024**3  # 5 GB
 
 OLLAMA_HOST: Final = "http://127.0.0.1:11434"
-OLLAMA_MODEL: Final = "llama3"
+# Qwen 2.5 is markedly stronger than Llama 3 8B on non-English text, which
+# matters now that the transcript it reasons over is Indonesian.
+OLLAMA_MODEL: Final = "qwen2.5:14b"
+
+# The transcriber detects the audio's language and refuses when it disagrees
+# with this, because assuming produced fluent English nonsense from Indonesian
+# audio and every clip built on it was meaningless.
+TRANSCRIBE_LANGUAGE: Final = "id"
+
 SURVEY_MODEL: Final = "base"
 PRECISE_MODEL: Final = "medium"
 WINDOW_PADDING_SECONDS: Final = 2.0

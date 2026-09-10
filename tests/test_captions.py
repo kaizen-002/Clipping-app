@@ -103,3 +103,20 @@ def test_line_stays_on_screen_through_inter_word_gaps() -> None:
     # Each event must begin exactly where the previous one ended: no holes.
     for (_, previous_end), (next_start, _) in zip(spans, spans[1:]):
         assert previous_end == next_start
+
+
+def test_only_the_first_word_of_a_line_carries_the_entrance() -> None:
+    """Retriggering the entrance per word makes the caption jitter instead of
+    settling, which reads as a glitch rather than a beat."""
+    sample = words(("one", 0.0, 0.40), ("two", 0.45, 0.85), ("three", 0.90, 1.30))
+    events = [l for l in build_ass(sample, 0.0).splitlines() if l.startswith("Dialogue:")]
+    assert events[0].count(r"\fad") == 1
+    assert all(r"\fad" not in event for event in events[1:])
+
+
+def test_the_entrance_rises_to_the_style_safe_area() -> None:
+    """The move target must match the margin in the style header, or the line
+    animates to one place and then jumps to another."""
+    output = build_ass(words(("hello", 0.0, 0.5)), 0.0)
+    anchor_y = tokens.FRAME_HEIGHT - tokens.SAFE_AREA_BOTTOM
+    assert f",{anchor_y},0," in output or f",{anchor_y}," in output

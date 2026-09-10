@@ -45,6 +45,17 @@ POP_SCALE_FROM: Final = 0.88
 POP_SCALE_TO: Final = 1.06
 SETTLE_DURATION_MS: Final = 67  # 2 frames, 1.06 back to 1.00
 FADE_IN_MS: Final = 67  # 2 frames
+
+# Line entrance: each new line fades up and rises slightly into place, so a
+# line change reads as a beat rather than a jump-cut of text. Applied only to
+# a line's first word event — retriggering it per word would make the caption
+# jitter continuously.
+ENTRANCE_FADE_MS: Final = 100  # 3 frames
+ENTRANCE_RISE_PX: Final = 28   # travel distance, upward
+
+# Depth. The stroke carries legibility; these carry the sense that the text
+# sits on the frame rather than beside it.
+GLOW_ALPHA: Final = 0x73  # shadow opacity, 0x00 opaque .. 0xFF clear
 # caption.word-advance comes from Whisper word timings, never a fixed interval.
 
 

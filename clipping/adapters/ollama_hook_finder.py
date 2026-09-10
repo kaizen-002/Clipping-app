@@ -27,6 +27,8 @@ podcast transcript — the parts that would stop someone scrolling.
 Prefer: a surprising claim, a strong opinion, a story turn, a question that lands.
 Avoid: introductions, sponsor reads, sign-offs, and small talk.
 The segments must not overlap each other, and are ordered best first.
+Each segment must come from a DIFFERENT part of the episode. Never return the
+same span twice with different wording — that is one clip, not several.
 
 Reply with one JSON object and nothing else. No prose, no code fence:
 {"clips": [{"start_seconds": <number>, "end_seconds": <number>, "reason": "<one sentence>"}]}
@@ -124,7 +126,14 @@ class OllamaHookFinder:
             # returned `{}`; asked for free-form JSON it echoed prompt
             # fragments back as keys.
             "format": _response_schema(count),
-            "options": {"temperature": 0.2, "num_predict": _MAX_TOKENS},
+            "options": {
+                "temperature": 0.2,
+                "num_predict": _MAX_TOKENS,
+                # CPU only. A 14B model asked to use the GPU dies with
+                # "Failed to allocate pinned memory" on this hardware, and
+                # PRD.md's reference machine has no GPU at all.
+                "num_gpu": 0,
+            },
         }
         try:
             response = httpx.post(

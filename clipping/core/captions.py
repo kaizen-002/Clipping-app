@@ -111,12 +111,36 @@ def build_ass(words: list[Word], clip_start: float) -> str:
                     rendered.append(text)
 
             body = " ".join(rendered)
+
+            # Only the line's first event carries the entrance. Retriggering
+            # it on every word would make the caption jitter continuously
+            # instead of settling.
+            prefix = _entrance() if active_index == 0 else ""
+
             events.append(
                 f"Dialogue: 0,{_ass_timestamp(start)},{_ass_timestamp(end)},"
-                f"Caption,,0,0,0,,{body}"
+                f"Caption,,0,0,0,,{prefix}{body}"
             )
 
     return _ass_header() + "\n".join(events) + "\n"
+
+
+def _entrance() -> str:
+    r"""Fade up and rise into place at the start of a line.
+
+    ``\move`` needs absolute coordinates, so the anchor is derived from the
+    same tokens the style header uses — bottom-centre, inset by the bottom
+    safe area. Deriving it keeps one source of truth; hard-coding it would put
+    the safe-area margin in two places that could drift apart.
+    """
+    fade = tokens.ENTRANCE_FADE_MS
+    rise = tokens.ENTRANCE_RISE_PX
+    anchor_x = tokens.FRAME_WIDTH // 2
+    anchor_y = tokens.FRAME_HEIGHT - tokens.SAFE_AREA_BOTTOM
+    return (
+        f"{{\\fad({fade},0)"
+        f"\\move({anchor_x},{anchor_y + rise},{anchor_x},{anchor_y},0,{fade})}}"
+    )
 
 
 def _active_span(text: str) -> str:

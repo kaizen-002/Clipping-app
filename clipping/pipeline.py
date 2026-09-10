@@ -250,7 +250,7 @@ class Pipeline:
             candidates = self._hook_finder.find(transcript, self._clip_count)
             selections = self._validate_all(candidates.clips, transcript, "llm")
             if selections:
-                return selections
+                return self._top_up(selections, transcript)
             first_reason = "no candidate survived validation"
         except Exception as error:  # noqa: BLE001
             # Broad on purpose: an adapter can fail in ways the core cannot
@@ -266,7 +266,7 @@ class Pipeline:
                 candidates = retry(transcript, first_reason, self._clip_count)
                 selections = self._validate_all(candidates.clips, transcript, "llm-retry")
                 if selections:
-                    return selections
+                    return self._top_up(selections, transcript)
             except Exception as error:  # noqa: BLE001 - same reasoning
                 self.tracker.update(75.0, f"falling back to heuristic — {error}")
 
@@ -282,6 +282,35 @@ class Pipeline:
         if not is_well_formed(start, end):
             return selection
         return selection.model_copy(update={"start": start, "end": end})
+
+    def _top_up(
+        self, selections: list[HookSelection], transcript: Transcript
+    ) -> list[HookSelection]:
+        """Fill the remaining slots from the heuristic.
+
+        A model asked for three clips may return the same span three times with
+        three different justifications — observed with qwen2.5 on a real
+        episode. Deduplicating that correctly leaves one clip, and returning
+        one clip when three were asked for is a worse answer than returning one
+        model pick plus two deterministic ones, each labelled with its origin.
+        """
+        if len(selections) >= self._clip_count:
+            return selections
+
+        taken = [(s.start, s.end) for s in selections]
+        for candidate in heuristic_hooks(transcript, self._clip_count * 3):
+            if len(selections) >= self._clip_count:
+                break
+            start, end = snap_to_sentences(candidate.start, candidate.end, transcript)
+            if not is_well_formed(start, end) or conflicts_with(start, end, taken):
+                continue
+            taken.append((start, end))
+            selections.append(
+                candidate.model_copy(
+                    update={"start": start, "end": end, "rank": len(selections) + 1}
+                )
+            )
+        return selections
 
     def _validate_all(self, candidates, transcript: Transcript, origin: str) -> list[HookSelection]:
         """Run the ladder over every candidate, keeping the survivors."""
