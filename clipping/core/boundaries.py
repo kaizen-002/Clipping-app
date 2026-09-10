@@ -60,9 +60,7 @@ def snap_to_sentences(
         # pulling the end back, because a clean start matters more than a
         # clean finish for something that has to survive three seconds of
         # scrolling.
-        snapped_end = _sentence_end_at_or_after(snapped_start + MAX_CLIP_SECONDS, segments)
-        if snapped_end - snapped_start > MAX_CLIP_SECONDS:
-            snapped_end = snapped_start + MAX_CLIP_SECONDS
+        snapped_end = _last_pause_within(snapped_start, MAX_CLIP_SECONDS, segments)
 
     snapped_end = _grow_to_preferred(
         snapped_start, snapped_end, segments, preferred_min
@@ -94,22 +92,50 @@ def _sentence_end_at_or_after(instant: float, segments) -> float:
     return segments[index].end
 
 
+def _last_pause_within(start: float, limit: float, segments) -> float:
+    """The latest segment end within `limit`, preferring a sentence end.
+
+    When no sentence end fits — Whisper punctuates some languages sparsely,
+    and only 14% of segments end a sentence on an Indonesian transcript — a
+    segment boundary is still a real pause in the speech, because segments come
+    from voice activity detection. Cutting there beats cutting at an arbitrary
+    timestamp, which lands mid-word.
+    """
+    ceiling = start + limit
+    best_pause = start
+    best_sentence = None
+
+    for segment in segments:
+        if segment.end <= start or segment.end > ceiling:
+            continue
+        best_pause = segment.end
+        if ends_a_sentence(segment.text):
+            best_sentence = segment.end
+
+    return best_sentence if best_sentence is not None else (best_pause or ceiling)
+
+
 def _grow_to_preferred(start: float, end: float, segments, preferred_min: float) -> float:
     """Extend forward a sentence at a time until the clip has room to land."""
     if end - start >= preferred_min:
         return end
 
+    # Prefer growing to a sentence end. On a sparsely punctuated transcript
+    # there may not be one in range, so a speech pause is the fallback.
+    fallback = end
     for segment in segments:
         if segment.end <= end:
             continue
-        if not ends_a_sentence(segment.text):
-            continue
         if segment.end - start > MAX_CLIP_SECONDS:
             break
+        fallback = segment.end
+        if not ends_a_sentence(segment.text):
+            continue
         end = segment.end
         if end - start >= preferred_min:
-            break
-    return end
+            return end
+
+    return end if end - start >= preferred_min else fallback
 
 
 def _index_containing(instant: float, segments) -> int | None:

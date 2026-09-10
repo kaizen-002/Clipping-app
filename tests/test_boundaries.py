@@ -91,3 +91,31 @@ def test_sentence_detection_reads_punctuation() -> None:
     assert ends_a_sentence("That is the point.")
     assert ends_a_sentence("Really?")
     assert not ends_a_sentence("and then he said")
+
+
+UNPUNCTUATED = build(
+    "jadi dimana pun juga",       # 0-5     no sentence end
+    "nanti aku wachap kamu deh",  # 5-10
+    "tapi memang bener-bener",    # 10-15
+    "oh baru nanti kayaknya",     # 15-20
+    "tiga lagi gore lagi",        # 20-25
+    "iya di sepatahnya",          # 25-30
+    "tiga baru kelemin",          # 30-35
+    "kok acitnya melben enak",    # 35-40
+)
+
+
+def test_a_sparsely_punctuated_transcript_still_cuts_on_a_pause() -> None:
+    """Whisper punctuates Indonesian sparsely — 14% of segments on a real
+    episode. Without a pause fallback the clip clamps to an arbitrary
+    timestamp and cuts mid-word, which is the original bug all over again."""
+    start, end = snap_to_sentences(0.0, 5.0, UNPUNCTUATED)
+    boundaries = {seg.end for seg in UNPUNCTUATED.segments} | {0.0}
+    assert end in boundaries, f"{end} is not a speech boundary"
+
+
+def test_the_pause_fallback_still_respects_the_maximum() -> None:
+    long_unpunctuated = build(*[f"kata nomor {i}" for i in range(40)], seconds=5.0)
+    start, end = snap_to_sentences(0.0, 5.0, long_unpunctuated)
+    assert end - start <= MAX_CLIP_SECONDS
+    assert end in {seg.end for seg in long_unpunctuated.segments}

@@ -184,6 +184,16 @@ raises `LanguageMismatch` when the detected language differs from the
 configured one. The hook model is `qwen2.5:14b`, which is materially stronger on
 non-English text than Llama 3 8B.
 
+*Model choice, measured not assumed:* `small` is **worse** than `base` for
+Indonesian on this material — on a 3-minute slice, `base` punctuated 92% of
+segments at 5.8x realtime while `small` punctuated 0% at 3.6x, returning
+lowercase unpunctuated fragments. The survey pass stays on `base`.
+
+*Punctuation varies by content:* 92% on an explanatory stretch, 14% across a
+whole episode with crosstalk. Clip boundaries therefore fall back to voice
+activity pauses when no sentence end is in range, rather than to an arbitrary
+timestamp.
+
 *Still unverified for Indonesian:* caption word-timing accuracy, and whether
 hook selection quality holds. Both were measured for English only.
 
